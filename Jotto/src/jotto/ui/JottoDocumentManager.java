@@ -1,0 +1,364 @@
+package jotto.ui;
+
+import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.Shape;
+import java.io.IOException;
+import java.util.Iterator;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.Element;
+import javax.swing.text.Highlighter;
+import javax.swing.text.DefaultHighlighter;
+import javax.swing.text.DefaultHighlighter.DefaultHighlightPainter;
+import javax.swing.text.JTextComponent;
+import javax.swing.text.html.HTML;
+import javax.swing.text.html.HTMLDocument;
+import jotto.Jotto.JottoPropertyType;
+import jotto.game.JottoGameData;
+import jotto.game.JottoGameStateManager;
+import properties_manager.PropertiesManager;
+
+/**
+ * JottoHTMLBuilder generates HTML content for display inside the Jotto
+ * game application, including the in-game GUI and the stats page. Note
+ * that we maintain both of these pages inside Documents, which store
+ * trees containing all the HTML. We will make use of HTML.Tag constants
+ * to update these DOMs (Document Object Models).
+ * 
+ * @author Richard McKenna
+ */
+public class JottoDocumentManager
+{
+    // THE JOTTO GAME'S UI HAS ACCESS TO ALL COMPONENTS, SO
+    // IT'S USEFUL TO HAVE IT WHEN WE NEED IT
+    private JottoUI ui;
+    
+    // THESE ARE THE DOCUMENTS WE'LL BE UPDATING HERE
+    private HTMLDocument gameDoc;
+    private HTMLDocument statsDoc;
+
+    // WE'LL USE THESE TO BUILD OUR HTML
+    private final String START_TAG =    "<";
+    private final String END_TAG =      ">";
+    private final String SLASH =        "/";
+    private final String SPACE =        " ";
+    private final String EMPTY_TEXT =   "";
+    private final String NL =           "\n";
+    private final String QUOTE =        "\"";
+    private final String OPEN_PAREN =   "(";
+    private final String CLOSE_PAREN =  ")";
+    private final String COLON =        ":";
+    private final String SEMICOLON =    ";";
+    private final String EQUAL =        "=";
+    private final String HASH =         "#";
+
+    // THESE ARE IDs IN THE GAME DISPLAY HTML FILE SO THAT WE 
+    // CAN GRAB THE NECESSARY ELEMENTS AND UPDATE THEM
+    private final String GUESSES_SUBHEADER_ID   = "guesses_subheader";
+    private final String GUESSES_LIST_ID        = "guesses_list";
+    private final String WIN_DISPLAY_ID         = "win_display";
+
+    // THESE ARE IDs IN THE STATS HTML FILE SO THAT WE CAN
+    // GRAB THE NECESSARY ELEMENTS AND UPDATE THEM
+    private final String GAMES_PLAYED_ID        = "games_played";
+    private final String WINS_ID                = "wins";
+    private final String LOSSES_ID              = "losses";
+    private final String FEWEST_GUESSES_ID      = "fewest_guesses";
+    private final String FASTEST_WIN_ID         = "fastest_win";
+    private final String GAME_RESULTS_HEADER_ID = "game_results_header";
+    private final String GAME_RESULTS_LIST_ID   = "game_results_list";
+    
+    private int fewestNum = -1;
+    private long fastestNum = -1;
+    private String[] guessesSoFar = new String[1000];
+    private String[] guessesSoFar2;
+    private int guessesSoFarLength = 0;
+    private boolean refresh = false;
+        
+    /**
+     * This constructor just keeps the UI for later. Note
+     * that once constructed, the docs will need to be set
+     * before this class can be used.
+     * 
+     * @param initUI 
+     */    
+    public JottoDocumentManager(JottoUI initUI)
+    {
+        // KEEP THE UI FOR LATER
+        ui = initUI;
+    }
+
+    /**
+     * Accessor method for initializing the game doc, which displays while
+     * the game is being played and displays the guesses. Note that this
+     * must be done before this object can be used.
+     * 
+     * @param initGameDoc The game document to be displayed while the
+     * game is being played.
+     */
+    public void setGameDoc(HTMLDocument initGameDoc)    
+    { 
+        gameDoc = initGameDoc; 
+    }
+    
+    /**
+     * Accessor method for initializing the stats doc, which displays past
+     * game results and statistics. Note that this must be done before this
+     * object can be used.
+     * 
+     * @param initStatsDoc The stats document to be displayed on the
+     * stats screen.
+     */
+    public void setStatsDoc(HTMLDocument initStatsDoc)  
+    {
+        statsDoc = initStatsDoc;  
+    }
+
+    // BELOW ARE FOUR METHODS THAT ARE USED TO INITIALIZE AND
+    // UPDATE THE GAME'S HTML:
+    // -addGuessToGamePage
+    // -buildGuessHTML
+    // -clearGamePage
+    // -updateGuessColors
+    
+    /**
+     * This method lets us add a guess to the game page display without
+     * having to rebuild the entire page. We just add it to the HTML list
+     * of guesses made so far this game.
+     * 
+     * @param guess Guess to be added to the display.
+     */
+    public void addGuessToGamePage(String guess)
+    {
+        PropertiesManager props = PropertiesManager.getPropertiesManager();
+        JottoGameData gameInProgress = ui.getGSM().getGameInProgress();
+
+        try
+        {
+            // START BY LOADING THE LANGUAGE-DEPENDENT SUBHEADER
+            String guessesSubheaderText = props.getProperty(JottoPropertyType.GAME_SUBHEADER_TEXT);
+            Element h2 = gameDoc.getElement(GUESSES_SUBHEADER_ID);
+            gameDoc.setInnerHTML(h2, guessesSubheaderText);
+            
+            // AND NOW FILL IN THE LIST. WE'RE GOING TO ADD 
+            // LIST ITEMS TO THE ORDERED LIST
+            Element ol = gameDoc.getElement(GUESSES_LIST_ID);
+            int lettersInGuess = gameInProgress.calcLettersInGuess(guess);
+            String htmlText = buildGuessHTML(guess, lettersInGuess);
+            gameDoc.insertBeforeEnd(ol, htmlText);
+            
+            if(!refresh) {
+                guessesSoFar[guessesSoFarLength] = guess;
+                guessesSoFarLength++;
+            }
+                
+        }
+        // THE ERROR HANDLER WILL DEAL WITH ERRORS ASSOCIATED WITH BUILDING
+        // THE HTML FOR THE PAGE, WHICH WOULD LIKELY BE DUE TO BAD DATA FROM
+        // AN XML SETUP FILE
+        catch(BadLocationException | IOException e)
+        {
+            JottoErrorHandler errorHandler = ui.getErrorHandler();
+            errorHandler.processError(JottoPropertyType.INVALID_DOC_ERROR_TEXT);
+        }
+    }
+    
+    public void addWinToGamePage() {
+        try {
+            Element wi = gameDoc.getElement(WIN_DISPLAY_ID);
+            gameDoc.insertBeforeEnd(wi, "YOU WIN!");
+        }
+        
+        catch(BadLocationException | IOException e)
+        {
+            JottoErrorHandler errorHandler = ui.getErrorHandler();
+            errorHandler.processError(JottoPropertyType.INVALID_DOC_ERROR_TEXT);
+        }
+    }
+    
+    /**
+     * This private helper method builds the HTML associated with a guess
+     * as a list item, adding the proper colors as currently set by the
+     * player.
+     * 
+     * @param guess Guess to add to the list.
+     * 
+     * @param lettersInGuess The number of letters from the guess in the
+     * secret word. We'll list this in parentheses after each guess.
+     * 
+     * @return 
+     */
+    private String buildGuessHTML(String guess, int lettersInGuess)
+    {
+        // FIRST THE OPENING LIST ITEM TAG WITH THE GUESS
+        // AS ITS ID. THIS IS OK SINCE WE DON'T ALLOW
+        // DUPLICATE GUESSES
+        
+        JottoGameData gameInProgress = ui.getGSM().getGameInProgress();
+        char[] guessChars = new char[guess.length()];
+        for(int i=0; i<guess.length(); i++) {
+            guessChars[i] = guess.charAt(i);
+        }
+        String htmlText = START_TAG + HTML.Tag.LI + SPACE + HTML.Attribute.ID + EQUAL + QUOTE + guess + QUOTE + END_TAG;
+
+        // HERE WE'RE PUTTING THE GUESS IN THE LIST ITEM
+        for(int i=0; i<guess.length(); i++){
+            
+            //if letter is red color red
+            if (ui.getColorForChar(guessChars[i]) == Color.red){
+                htmlText += START_TAG + "span class" + EQUAL + QUOTE + "highlight" + QUOTE + END_TAG;
+                htmlText += guessChars[i];
+                htmlText += START_TAG + SLASH + "span" + END_TAG;
+            } else {
+                //if letter is green color green
+                if (ui.getColorForChar(guessChars[i]) == Color.green){
+                    htmlText += START_TAG + "span class" + EQUAL + QUOTE + "highlightgreen" + QUOTE + END_TAG;
+                    htmlText += guessChars[i];
+                    htmlText += START_TAG + SLASH + "span" + END_TAG;                    
+                } else {
+                    //if the guess is the secret word and letter is not red or green color gray
+                    if (gameInProgress.getSecretWord().equals(guess)) {
+                        htmlText += START_TAG + "span class" + EQUAL + QUOTE + "highlightgray" + QUOTE + END_TAG;
+                        htmlText += guessChars[i];
+                        htmlText += START_TAG + SLASH + "span" + END_TAG;  
+                    } else {
+                        //otherwise add letter with no background color
+                        htmlText += guessChars[i];
+                    }
+                }
+            }
+            
+        }
+
+        // NOW ADD INFORMATION ABOUT THE NUMBER OF LETTERS IN THE
+        // GUESS THAT ARE IN THE SECRET WORD
+        htmlText +=   SPACE + OPEN_PAREN
+                +   lettersInGuess
+                +   CLOSE_PAREN + START_TAG + SLASH + HTML.Tag.LI + END_TAG + NL;    
+        
+        // RETURN THE COMPLETED HTML
+        return htmlText;
+    }
+
+    /**
+     * When a new game starts the game page should not have a subheader
+     * or display guesses or a win state, so all of that has to be cleared
+     * out of the DOM at that time. This method does the work of clearing
+     * out these nodes.
+     */
+    public void clearGamePage()
+    {
+        try
+        {
+            // WE'LL PUT THIS <br /> TAG IN PLACE OF THE CONTENT WE'RE REMOVING
+            String lineBreak = START_TAG + HTML.Tag.BR + SPACE + SLASH + END_TAG;
+
+            // CLEAR THE SUBHEADER
+            Element h2 = gameDoc.getElement(GUESSES_SUBHEADER_ID);
+            gameDoc.setInnerHTML(h2, lineBreak);
+
+            // CLEAR THE GUESS LIST
+            Element ol = gameDoc.getElement(GUESSES_LIST_ID);
+            gameDoc.setInnerHTML(ol, lineBreak);
+
+            // CLEAR THE WIN DISPLAY
+            Element winH2 = gameDoc.getElement(WIN_DISPLAY_ID);
+            gameDoc.setInnerHTML(winH2, lineBreak);
+        } 
+        // THE ERROR HANDLER WILL DEAL WITH ERRORS ASSOCIATED WITH BUILDING
+        // THE HTML FOR THE PAGE, WHICH WOULD LIKELY BE DUE TO BAD DATA FROM
+        // AN XML SETUP FILE
+        catch (BadLocationException | IOException ex)
+        {
+            JottoErrorHandler errorHandler = ui.getErrorHandler();
+            errorHandler.processError(JottoPropertyType.INVALID_DOC_ERROR_TEXT);
+        }        
+    }
+    
+    public void updateGuessColor() {
+        clearGamePage();
+        refresh = true;
+        
+        for(int i=0; i<guessesSoFarLength; i++) {
+            addGuessToGamePage(guessesSoFar[i]);
+        }
+                
+        refresh = false;
+
+    }
+    
+    /**
+     * This method adds the data from the completedGame argument
+     * to the stats page, as well as loading all the newly computed
+     * stats for all the games played.
+     * 
+     * @param completedGame Game whose summary will be added to
+     * the stats page.
+     */
+    public void addGameResultToStatsPage(JottoGameData completedGame)
+    {
+        // GET THE GAME STATS
+        JottoGameStateManager gsm = ui.getGSM();
+        PropertiesManager props = PropertiesManager.getPropertiesManager();
+        int gamesPlayed = gsm.getGamesPlayed();
+        int wins = gsm.getWins();
+        int fewestGuesses;
+        
+        try
+        {
+            // USE THE STATS TO UPDATE THE TABLE AT THE TOP OF THE PAGE
+            Element gamePlayedElement = statsDoc.getElement(GAMES_PLAYED_ID);
+            statsDoc.setInnerHTML(gamePlayedElement, EMPTY_TEXT + gamesPlayed);
+
+            Element winsElement = statsDoc.getElement(WINS_ID);
+            statsDoc.setInnerHTML(winsElement, EMPTY_TEXT + wins);
+            
+            Element losesElement = statsDoc.getElement(LOSSES_ID);
+            int losses = gamesPlayed - wins;
+            statsDoc.setInnerHTML(losesElement, EMPTY_TEXT + losses);
+            
+            // Only considers game for stats page if word is found a.k.a. a win.
+            if(completedGame.isWordFound()) {
+                // Adds stats to fewest guesses slot if it has the fewest amount of guesses
+                Element fewestElement = statsDoc.getElement(FEWEST_GUESSES_ID);
+                if (completedGame.getNumGuesses() < fewestNum || fewestNum == -1) {
+                    fewestNum = completedGame.getNumGuesses();
+                    statsDoc.setInnerHTML(fewestElement, EMPTY_TEXT + completedGame.toString());
+                }
+
+                
+                // adds stats to quickest win time if it had the least amount of time clocked.
+                Element fastestElement = statsDoc.getElement(FASTEST_WIN_ID);
+                if (completedGame.getTimeOfGame() < fastestNum || fastestNum == -1) {
+                    fastestNum = completedGame.getTimeOfGame();
+                    statsDoc.setInnerHTML(fastestElement, EMPTY_TEXT + completedGame.toString());
+                }
+            }
+            
+            // START BY LOADING THE LANGUAGE-DEPENDENT SUBHEADER
+            String resultsSubheaderText = props.getProperty(JottoPropertyType.GAME_SUBHEADER_TEXT);
+            Element h3 = statsDoc.getElement(GAME_RESULTS_HEADER_ID);
+            statsDoc.setInnerHTML(h3, resultsSubheaderText);
+            
+            // AND NOW FILL IN THE LIST. WE'RE GOING TO ADD 
+            // LIST ITEMS TO THE ORDERED LIST
+            String iterationItem = START_TAG + HTML.Tag.LI + SPACE + HTML.Attribute.ID + EQUAL + QUOTE + completedGame.toString() + QUOTE + END_TAG;
+            iterationItem += completedGame.toString();
+            Element ol3 = statsDoc.getElement(GAME_RESULTS_LIST_ID);
+            statsDoc.insertBeforeEnd(ol3, iterationItem);
+            
+            
+            
+            
+            
+        }
+        // WE'LL LET THE ERROR HANDLER TAKE CARE OF ANY ERRORS,
+        // WHICH COULD HAPPEN IF XML SETUP FILES ARE IMPROPERLY
+        // FORMATTED
+        catch(BadLocationException | IOException e)
+        {
+            JottoErrorHandler errorHandler = ui.getErrorHandler();
+            errorHandler.processError(JottoPropertyType.INVALID_DOC_ERROR_TEXT);
+        }
+    }
+}
